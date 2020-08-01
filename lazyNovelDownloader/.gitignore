@@ -1,0 +1,7 @@
+.cache/
+.novel/
+*.exe
+*.txt
+*.epub
+test.go
+!lnd.exe
