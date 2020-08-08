@@ -3,205 +3,117 @@ package extract
 
 import (
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path"
-	"strconv"
+	"io"
 	"time"
+
+	"github.com/RaymondJiangkw/Lazy/utils"
 )
 
 const (
-	outputPrefixEachTurn = "	"
-	extractCacheFolder   = ".novel"
-	ProgressBarWidth     = 20
+	outputPrePostfixEachTurn = "    "
+	extractCacheFolder       = ".novel"
 )
 
-var extractCacheHome string
+func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []error) {
+	var display utils.Display
+	cnt := len(urls)
+	catalogueSignal := make(chan struct{}, cnt)
+	catalogues := make([]Chapters, cnt)
+	catalogueErrors := make([]error, cnt)
 
-func generateString(length int, s string) string {
-	var ret string
-	for i := 0; i < length; i++ {
-		ret += s
+	for i, url := range urls {
+		go func(i int, url string) {
+			defer func() {
+				catalogueSignal <- struct{}{}
+			}()
+			catalogues[i], catalogueErrors[i] = Catalogue(url)
+		}(i, url)
 	}
-	return ret
-}
+	display.EasyProgress(writer, "Fetching Catalogues", "...", len(urls), catalogueSignal)
+	close(catalogueSignal)
 
-func rString(length int) (ret string) {
-	ret = generateString(length, "\r")
-	return
-}
-
-func spinner(prefix string, delay time.Duration, signal <-chan struct{}) {
-	for {
-		for _, r := range `-\|/` {
-			select {
-			case <-signal:
-				return
-			default:
-				fmt.Printf("%s%s%c", rString(len(prefix)+1), prefix, r)
-				time.Sleep(delay)
-			}
-		}
-	}
-}
-
-func fmtDuration(d time.Duration) string {
-	d = d.Round(time.Second)
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
-	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
-}
-
-func ProgressBar(prefix string, defaultText string, maximum int, width int, delay time.Duration, signal <-chan struct{}, info <-chan int) {
-	var lastText, currentText string
-	var progress int
-	var expectedRemainingTime time.Duration
 	beginTime := time.Now()
-	for {
-		fmt.Printf("%s", rString(len(lastText)))
-		select {
-		case <-signal:
-			fmt.Printf("%s", generateString(len(lastText)*2, " "))
-			fmt.Printf("%s", rString(len(lastText)*2))
-			return
-		case i := <-info:
-			progress = int((float64(i) / float64(maximum)) * float64(width))
-			expectedRemainingTime = time.Duration(int64((float64(time.Since(beginTime)) / float64(i)) * float64(maximum-i)))
-			currentText = strconv.Itoa(i) + "/" + strconv.Itoa(maximum) + " " + "[" + generateString(progress, ">") + generateString(width-progress, "-") + "]" + " Remaining: " + fmtDuration(expectedRemainingTime)
-			defaultText = currentText
-		default:
-			currentText = defaultText
-		}
-		fmt.Printf("%s", prefix+currentText)
-		lastText = prefix + currentText
-	}
-}
-
-func Extract(url string, novelName string) (c_s Chapters, err error) {
-	fmt.Printf("Fetching catalogue...\n")
-	var signal chan struct{} = make(chan struct{}, 0)
-	var progress chan int = make(chan int)
-	go spinner("", 100*time.Millisecond, signal)
-	c_s, err = Catalogue(url)
-	signal <- struct{}{}
-	if err != nil {
-		return
-	}
-	fmt.Printf("\rDetected %d chapters from %s.\n", len(c_s), url)
-	beginTime := time.Now()
-	var urls []string
-	var index, sum, times int
+	var times int
 	for {
 		times++
-		for _, c := range c_s {
-			if !c.Fetch {
-				readFromCache := getFromCache(novelName, c.Name)
-				if readFromCache != "" {
-					c.Content = readFromCache
-					c.Fetch = true
-				} else {
-					urls = append(urls, c.Url)
+		fmt.Fprintf(writer, "%dth Turn:\n", times)
+		initSignal := make(chan struct{})
+		go display.TemporaryText(writer, "Initializing...", initSignal)
+		// Utilized Data
+		Urls := make([][]string, 0, 0)
+		var ContentSignals []<-chan ContentResult
+		var IOCompletes []<-chan struct{}
+		var Index []int
+		// ProgressBar Data
+		var Phases []int
+		var Signals [][]<-chan struct{}
+		var Maximums [][]int
+		var Prefix, Postfix [][]string
+		for i := 0; i < cnt; i++ {
+			if catalogueErrors[i] != nil {
+				continue
+			}
+
+			urls := []string{}
+			for _, catalogue := range catalogues[i] {
+				if !catalogue.Fetch {
+					urls = append(urls, catalogue.Url)
 				}
 			}
+			if len(urls) == 0 {
+				continue
+			}
+
+			Index = append(Index, i)
+			Urls = append(Urls, urls)
+			Maximums = append(Maximums, []int{len(urls), len(urls)})
+
+			hostname, _ := utils.SignatureURL(urls[i])
+
+			Phases = append(Phases, 2)
+			Prefix = append(Prefix, []string{outputPrePostfixEachTurn + hostname + " Fetch: ", outputPrePostfixEachTurn + hostname + " Extract: "})
+			Postfix = append(Postfix, []string{outputPrePostfixEachTurn, outputPrePostfixEachTurn})
+
+			fetchSignal := make(chan struct{})
+			resultChan, extractSignal, ioCompletes := Content(urls, fetchSignal)
+			ContentSignals = append(ContentSignals, resultChan)
+			IOCompletes = append(IOCompletes, ioCompletes...)
+			Signals = append(Signals, []<-chan struct{}{fetchSignal, extractSignal})
 		}
-		if len(urls) == 0 {
+		validCnt := len(Index)
+		if validCnt == 0 {
 			break
 		}
-		fmt.Printf("%dth Turn:\n", times)
-		contents, errors := Content(progress, func() {
-			go ProgressBar(outputPrefixEachTurn+"Extract: ", "Extracting...", len(urls), ProgressBarWidth, time.Second, signal, progress)
-		}, urls...)
-		signal <- struct{}{}
-		index, sum = 0, 0
-		for _, c := range c_s {
-			if !c.Fetch {
-				if errors[index] == nil {
-					c.Content = contents[index]
-					c.Fetch = true
-					writeToCache(novelName, c.Name, &c.Content)
+		close(initSignal)
+		display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Prefix: Prefix, Postfix: Postfix, Maximum: Maximums, Signal: Signals, Phase: Phases})
+		hasFail := false
+		for i := 0; i < validCnt; i++ {
+			result := <-ContentSignals[i]
+			k := 0
+			index := Index[i]
+			for j := 0; j < len(catalogues[index]); j++ {
+				if !catalogues[index][j].Fetch {
+					if result.Errs[k] == nil {
+						catalogues[index][j].Fetch = true
+						catalogues[index][j].Content = result.Contents[k]
+					} else {
+						hasFail = true
+					}
+					k++
 				}
-				index++
-			}
-			if c.Fetch {
-				sum++
 			}
 		}
-		urls = nil
-		fmt.Printf(outputPrefixEachTurn+"Having complete %d pages.\n", sum)
-		if sum != len(c_s) {
-			fmt.Printf(outputPrefixEachTurn+"Pause %d secs for next turn.\n", pauseSeconds)
+		fmt.Fprintf(writer, "I/O Synchronizing...\n")
+		utils.WaitSync(IOCompletes)
+		// Here is an early stop to format output.
+		if !hasFail {
+			break
+		} else {
+			fmt.Fprintf(writer, outputPrePostfixEachTurn+"Pause %d secs for next turn.\n", pauseSeconds)
 			time.Sleep(time.Second * pauseSeconds)
 		}
 	}
-	fmt.Printf("After %dth Turn, finish all %d pages.\n", times-1, len(c_s))
+	fmt.Printf("After %dth Turn, finish all pages.\n", times)
 	fmt.Printf("Total time: %.0f secs.\n", time.Since(beginTime).Seconds())
-	return
-}
-
-func init() {
-	home, err := os.Getwd()
-	if err != nil {
-		return
-	}
-	if _, err = os.Stat(path.Join(home, extractCacheFolder)); os.IsNotExist(err) {
-		err = os.Mkdir(path.Join(home, extractCacheFolder), 0777)
-		if err != nil {
-			return
-		}
-	} else if err != nil {
-		return
-	}
-	extractCacheHome = path.Join(home, extractCacheFolder)
-}
-
-func getFromCache(name string, chapter string) string {
-	if extractCacheHome == "" {
-		return ""
-	}
-	if _, err := os.Stat(path.Join(extractCacheHome, name)); err != nil {
-		return ""
-	}
-	if _, err := os.Stat(path.Join(extractCacheHome, name, id(chapter))); err != nil {
-		return ""
-	}
-	file, err := os.Open(path.Join(extractCacheHome, name, id(chapter)))
-	if err != nil {
-		return ""
-	}
-	bytes, err := ioutil.ReadAll(file)
-	if err != nil {
-		return ""
-	}
-	return string(bytes)
-}
-
-func writeToCache(name string, chapter string, content *string) {
-	if extractCacheHome == "" {
-		return
-	}
-	if _, err := os.Stat(path.Join(extractCacheHome, name)); os.IsNotExist(err) {
-		err = os.Mkdir(path.Join(extractCacheHome, name), 0777)
-		if err != nil {
-			return
-		}
-	} else if err != nil {
-		return
-	}
-	if _, err := os.Stat(path.Join(extractCacheHome, name, id(chapter))); err == nil {
-		return
-	} else if !os.IsNotExist(err) {
-		os.Remove(path.Join(extractCacheHome, name, id(chapter)))
-	}
-	file, err := os.Create(path.Join(extractCacheHome, name, id(chapter)))
-	defer file.Close()
-	if err != nil {
-		return
-	}
-	_, err = file.WriteString(*content)
-	if err != nil {
-		os.Remove(path.Join(extractCacheHome, name, id(chapter)))
-	}
+	return catalogues, catalogueErrors
 }

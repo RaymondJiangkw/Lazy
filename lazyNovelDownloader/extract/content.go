@@ -3,18 +3,17 @@ package extract
 
 import (
 	"bufio"
-	"io/ioutil"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/RaymondJiangkw/Lazy/utils"
 
 	"github.com/mvdan/xurls"
-
 	"golang.org/x/net/html"
 )
 
 const (
-	prefix = "    "
+	textPrefix = "    "
 )
 
 func content(body string) (content string, err error) {
@@ -22,56 +21,66 @@ func content(body string) (content string, err error) {
 	if err != nil {
 		return
 	}
-	content = mostTextUnderNode("", doc, Candidates([]string{"div"}))
+	content = mostTextUnderDiv(doc)
 	content = formatString(&content)
 	return
 }
 
-func Content(info chan<- int, progressFunc func(), urls ...string) (contents []string, errs []error) {
-	var signal chan struct{} = make(chan struct{})
-	var fetchProgress chan int = make(chan int)
-	contents = make([]string, len(urls), len(urls))
-	errs = make([]error, len(urls), len(urls))
-	go ProgressBar(outputPrefixEachTurn+"Fetch: ", "Fetching...", len(urls), ProgressBarWidth, time.Second, signal, fetchProgress)
-	bodies, f_errs := Fetch(false, ioutil.Discard, fetchProgress, urls...)
-	signal <- struct{}{}
-	var tokens = make(chan struct{}, maximumRoutines)
-	var wg sync.WaitGroup
-	var finish int
-	var lock sync.Mutex
-	progressFunc()
-	for i, _ := range urls {
-		wg.Add(1)
-		go func(i int) {
-			defer func() {
-				lock.Lock()
-				finish++
-				info <- finish
-				lock.Unlock()
-				wg.Done()
-			}()
-			tokens <- struct{}{}
-			if f_errs[i] != nil {
-				contents[i], errs[i] = "", f_errs[i]
-			} else {
-				contents[i], errs[i] = content(bodies[i])
-			}
-			<-tokens
-		}(i)
-	}
-	wg.Wait()
-	return
+type ContentResult struct {
+	Contents []string
+	Errs     []error
 }
 
-func mostTextUnderNode(ret string, n *html.Node, nodes Candidates) string {
-	if n.Type == html.ElementNode && nodes.indexOf(n.Data) != -1 {
-		text := extractText("", n, nodes, "\n")
-		if len(text) > len(ret) {
-			ret = text
+// Content use async I/O.
+// ioCompletes must be wait after receiving from resultChan.
+func Content(urls []string, fetchSignal chan<- struct{}) (<-chan ContentResult, <-chan struct{}, []<-chan struct{}) {
+	var result ContentResult
+	var bodies []*string
+	var errs []error
+	var ioCompletes []<-chan struct{}
+	result.Contents = make([]string, len(urls), len(urls))
+	result.Errs = make([]error, len(urls), len(urls))
+	resultChan := make(chan ContentResult)
+	extractSignal := make(chan struct{})
+	tokens := make(chan struct{}, maximumRoutines)
+	go func() {
+		var wg sync.WaitGroup
+		bodies, errs, ioCompletes = utils.Fetch(urls, &utils.FetchOption{Redirect: true, Signal: fetchSignal})
+		for i, body := range bodies {
+			wg.Add(1)
+			go func(i int, body *string) {
+				defer func() {
+					<-tokens
+					extractSignal <- struct{}{}
+					wg.Done()
+				}()
+				tokens <- struct{}{}
+				if errs[i] != nil {
+					result.Contents[i], result.Errs[i] = "", errs[i]
+				} else {
+					_content, _err := content(*bodies[i])
+					result.Contents[i], result.Errs[i] = _content, _err
+				}
+				return
+			}(i, body)
 		}
-	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		ret = mostTextUnderNode(ret, c, nodes)
+		wg.Wait()
+		close(extractSignal)
+		resultChan <- result
+		close(resultChan)
+	}()
+	return resultChan, extractSignal, ioCompletes
+}
+
+func mostTextUnderDiv(n *html.Node) string {
+	tags := utils.Select(n, "div")
+	avoidFunc := utils.SelectTagNames([]string{"div"})
+	var ret string
+	for _, tag := range tags {
+		t := utils.ExtractText(tag, "\n", avoidFunc)
+		if len(t) > len(ret) {
+			ret = t
+		}
 	}
 	return ret
 }
@@ -82,7 +91,7 @@ func formatString(s *string) (ret string) {
 	r := bufio.NewScanner(strings.NewReader(*s))
 	for r.Scan() {
 		if s := strings.Join(rxRelaxed.Split(strings.TrimFunc(r.Text(), trimFunc), -1), ""); len(s) > 0 {
-			ret += prefix + s + "\n"
+			ret += textPrefix + s + "\n"
 		}
 	}
 	return

@@ -3,13 +3,12 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 
-	"github.com/RaymondJiangkw/Lazy/lazyNovelDownloader/write"
-
 	"github.com/RaymondJiangkw/Lazy/lazyNovelDownloader/extract"
+	"github.com/RaymondJiangkw/Lazy/lazyNovelDownloader/write"
 )
 
 var novelName = flag.String("name", "", "[compulsory] Novel Name")
@@ -26,24 +25,25 @@ const (
 func main() {
 	flag.Parse()
 	if len(flag.Args()) > 0 || (*outputFileFormat != "txt" && *outputFileFormat != "epub") || *novelName == "" || *catalogURL == "" {
-		fmt.Println(invalidPrompt)
+		log.Fatalf("%s", invalidPrompt)
 	}
 	if *outputFileName == "" {
 		*outputFileName = *novelName
 	}
-	c_s, err := extract.Extract(*catalogURL, *novelName)
-	if err != nil {
-		log.Fatalf("While extracting contents"+errorPrompt, err)
+	c_s, errs := extract.Extract(os.Stdout, []string{*catalogURL}, *novelName)
+	if errs[0] != nil {
+		log.Fatalf("While extracting contents"+errorPrompt, errs[0])
 	}
+	var err error
 	*outputFileName, err = filepath.Abs(*outputFileName)
 	if err != nil {
 		log.Fatalf("While getting output file path"+errorPrompt, err)
 	}
 	switch *outputFileFormat {
 	case "txt":
-		err = write.WriteToTxt(c_s, *outputFileName, write.NovelInfo{Name: *novelName, Author: *novelAuthor})
+		err = write.WriteToTxt(os.Stdout, c_s[0], *outputFileName, write.NovelInfo{Name: *novelName, Author: *novelAuthor})
 	case "epub":
-		err = write.WriteToEpub(c_s, *outputFileName, write.NovelInfo{Name: *novelName, Author: *novelAuthor})
+		err = write.WriteToEpub(os.Stdout, c_s[0], *outputFileName, write.NovelInfo{Name: *novelName, Author: *novelAuthor})
 	}
 	if err != nil {
 		log.Fatalf("While writing to file"+errorPrompt, err)

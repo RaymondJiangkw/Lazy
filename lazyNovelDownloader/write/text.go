@@ -4,11 +4,12 @@ package write
 import (
 	"bufio"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
+
+	"github.com/RaymondJiangkw/Lazy/utils"
 
 	"github.com/bmaupin/go-epub"
 
@@ -26,35 +27,30 @@ const (
 	fontFile = "Kaiti.ttf"
 )
 
+const (
+	outputPrePostfixText = "    "
+	outputIOText         = "I/O Processing..."
+)
+
 type NovelInfo struct {
 	Name   string
 	Author string
 }
 
-func WriteToTxt(chapters extract.Chapters, filePath string, novelInfo NovelInfo) (e error) {
-	var signal chan struct{} = make(chan struct{})
-	var info chan int = make(chan int)
+func WriteToTxt(writer io.Writer, chapters extract.Chapters, filePath string, novelInfo NovelInfo) (e error) {
+	var display utils.Display
+	signal := make(chan struct{})
 	if !strings.HasSuffix(filePath, ".txt") {
 		filePath += ".txt"
 	}
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
-		os.Remove(filePath)
-	}
-	file, e := os.Create(filePath)
-	defer file.Close()
-	if e != nil {
-		return
-	}
 	fmt.Printf("Writing to file %s...\n", filepath.Base(filePath))
 	novel := Prologue + "\n"
-	if novelInfo.Name != "" {
-		novel += "Name:	" + novelInfo.Name + "\n"
-	}
-	if novelInfo.Author != "" {
-		novel += "Author:	" + novelInfo.Author + "\n"
-	}
-	go extract.ProgressBar("	", "", len(chapters), extract.ProgressBarWidth, time.Second, signal, info)
-	for finish, c := range chapters {
+	novel += "Name:	" + novelInfo.Name + "\n"
+	novel += "Author:	" + novelInfo.Author + "\n"
+
+	go display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
+
+	for _, c := range chapters {
 		novel += "\n" + c.Name + "\n"
 		if !c.Fetch {
 			novel += Lack
@@ -62,28 +58,18 @@ func WriteToTxt(chapters extract.Chapters, filePath string, novelInfo NovelInfo)
 			novel += c.Content
 		}
 		novel += "\n"
-		info <- (finish + 1)
+		signal <- struct{}{}
 	}
-	signal <- struct{}{}
-	_, e = file.WriteString(novel)
+	fmt.Fprintf(writer, "%s", outputIOText)
+	e = utils.WriteFileString(filePath, &novel, false)
 	return
 }
 
-func WriteToEpub(chapters extract.Chapters, filePath string, novelInfo NovelInfo) (e error) {
-	var signal chan struct{} = make(chan struct{})
-	var info chan int = make(chan int)
-	if !strings.HasSuffix(filePath, ".epub") {
-		filePath += ".epub"
-	}
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
-		os.Remove(filePath)
-	}
-	if e != nil {
-		return
-	}
+func WriteToEpub(writer io.Writer, chapters extract.Chapters, filePath string, novelInfo NovelInfo) (e error) {
+	var display utils.Display
+	signal := make(chan struct{})
 	fmt.Printf("Writing to file %s...\n", filepath.Base(filePath))
-	var novelName string
-	novelName = novelInfo.Name
+	novelName := novelInfo.Name
 	epub := epub.NewEpub(novelName)
 	// Set Novel Information
 	epub.SetAuthor(novelInfo.Author)
@@ -93,7 +79,7 @@ func WriteToEpub(chapters extract.Chapters, filePath string, novelInfo NovelInfo
 	fontPath, _ := filepath.Abs(fontFile)
 	epub.AddFont(fontPath, fontFile)
 	epub.AddCSS(cssPath, cssFile)
-	epub.AddSection(`<p>`+EpubFormatString(Prologue)+`</p>`, "Prologue", "prologue.xhtml", "")
+	epub.AddSection(EpubFormatString(Prologue), "Prologue", "prologue.xhtml", "")
 	// Generate Catalog
 	catalog := `<h1>` + `Catalog` + `</h1>`
 	catalog += `<div id="catalog">`
@@ -102,7 +88,9 @@ func WriteToEpub(chapters extract.Chapters, filePath string, novelInfo NovelInfo
 	}
 	catalog += `</div>`
 	epub.AddSection(catalog, "Catalog", "catalog.xhtml", "")
-	go extract.ProgressBar("	", "", len(chapters), extract.ProgressBarWidth, time.Second, signal, info)
+
+	go display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
+
 	for finish, c := range chapters {
 		content := c.Content
 		if !c.Fetch {
@@ -110,14 +98,13 @@ func WriteToEpub(chapters extract.Chapters, filePath string, novelInfo NovelInfo
 		}
 		_, e = epub.AddSection(`<h2>`+c.Name+`</h2>`+`<div id="content">`+EpubFormatString(content)+`</div>`+`<div id="foot">`+`<a href="catalog.xhtml" align="right">Back to Catalog</a>`+`</div>`, c.Name, strconv.Itoa(finish)+".xhtml", "")
 		if e != nil {
-			// Recycle ProgressBar
-			signal <- struct{}{}
+			close(signal)
 			return
 		}
-		info <- (finish + 1)
+		signal <- struct{}{}
 	}
-	// Recycle ProgressBar
-	signal <- struct{}{}
+	close(signal)
+	fmt.Fprintf(writer, "%s", outputIOText)
 	e = epub.Write(filePath)
 	return
 }

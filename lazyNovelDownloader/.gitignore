@@ -4,4 +4,3 @@
 *.txt
 *.epub
 test.go
-!lnd.exe

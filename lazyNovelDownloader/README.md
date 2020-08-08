@@ -36,4 +36,5 @@ $ go build lnd.go
 * Compare catalogs between different websites, and Assess contents provided by different websites to collect high-quality text.
 
 ## Log
+* 2020/08/08 Rewrite the whole program and Prepare for Auto-Detection.
 * 2020/08/01 Release Alpha Version.
