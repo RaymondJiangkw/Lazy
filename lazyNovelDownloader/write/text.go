@@ -68,6 +68,9 @@ func WriteToTxt(writer io.Writer, chapters extract.Chapters, filePath string, no
 func WriteToEpub(writer io.Writer, chapters extract.Chapters, filePath string, novelInfo NovelInfo) (e error) {
 	var display utils.Display
 	signal := make(chan struct{})
+	if !strings.HasPrefix(filePath, ".epub") {
+		filePath += ".epub"
+	}
 	fmt.Printf("Writing to file %s...\n", filepath.Base(filePath))
 	novelName := novelInfo.Name
 	epub := epub.NewEpub(novelName)

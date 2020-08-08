@@ -46,6 +46,9 @@ func Catalogue(url string) (c Chapters, e error) {
 	var tmp Chapters // Remove possible head duplications
 	var exists map[string]int = make(map[string]int)
 	for _, a := range aTags {
+		if a.Href == "" || a.Text == "" {
+			continue
+		}
 		url, err := utils.CompleteURL(url, a.Href)
 		if err != nil {
 			continue

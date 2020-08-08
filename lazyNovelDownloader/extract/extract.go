@@ -31,7 +31,6 @@ func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []e
 	}
 	display.EasyProgress(writer, "Fetching Catalogues", "...", len(urls), catalogueSignal)
 	close(catalogueSignal)
-
 	beginTime := time.Now()
 	var times int
 	for {
