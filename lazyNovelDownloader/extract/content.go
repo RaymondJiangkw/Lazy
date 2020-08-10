@@ -86,7 +86,7 @@ func mostTextUnderDiv(n *html.Node) string {
 }
 
 func formatString(s *string) (ret string) {
-	var trimFunc = func(r rune) bool { return r == '\n' || r == ' ' || r == '\u00a0' || r == '\u3000' }
+	var trimFunc = func(r rune) bool { return r == '\n' || r == ' ' || r == '\u00a0' || r == '\u3000' || r == '\t' }
 	rxRelaxed := xurls.Relaxed()
 	r := bufio.NewScanner(strings.NewReader(*s))
 	for r.Scan() {

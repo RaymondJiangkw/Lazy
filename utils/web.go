@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,15 @@ func CompleteURL(base string, appendix string) (string, error) {
 	return b.ResolveReference(u).String(), nil
 }
 
+func PageNameURL(URL string) string {
+	base := path.Base(URL)
+	pos := strings.Index(base, ".")
+	if pos == -1 {
+		pos = len(base)
+	}
+	return base[:pos]
+}
+
 // extractKey extract the first key-value pair, which is in the form of key?value? .
 func extractKey(key string, content *string) string {
 	if loc := strings.Index(*content, key); loc != -1 {
@@ -57,16 +67,40 @@ func extractKey(key string, content *string) string {
 	return ""
 }
 
+func requestSetHeader(r *http.Request) {
+	r.Header.Set("User-Agent", headUserAgent)
+	r.Header.Set("Accept", headAccept)
+}
+
+// fetch enable the optimization of TIMEOUT Setting, Redirect of `window.onlocation=`, and Cookie Check by double requesting.
 // @param url string input will be normalized.
 // @param redirect bool determine whether redirect the page, if `window.location=` exists.
-func fetch(url string, redirect bool, timeout time.Duration) (*string, error) {
+func fetch(url string, redirect bool, timeout time.Duration, useCookie bool) (*string, error) {
 	url = NormalizeURL(url)
 	client := http.Client{
 		Timeout: timeout,
 	}
-	resp, err := client.Get(url)
+	// First `Get` to fetch Cookie
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
+	}
+	requestSetHeader(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if useCookie {
+		// Add Cookie to Request
+		for _, cookie := range resp.Cookies() {
+			req.AddCookie(cookie)
+		}
+		resp.Body.Close()
+		// Second `Get` to fetch Content
+		resp, err = client.Do(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -82,7 +116,7 @@ func fetch(url string, redirect bool, timeout time.Duration) (*string, error) {
 			if err != nil {
 				return &content, err
 			}
-			return fetch(newURL, redirect, timeout)
+			return fetch(newURL, redirect, timeout, useCookie)
 		}
 	}
 	return &content, nil
@@ -99,13 +133,13 @@ func initFetch() {
 }
 
 // @param url string e.g. http://www.google.com www.google.com
-func fetchWithTry(url string, redirect bool, errWriter io.Writer, timeout time.Duration) (data *string, err error) {
+func fetchWithTry(url string, redirect bool, errWriter io.Writer, timeout time.Duration, useCookie bool) (data *string, err error) {
 	for i := 0; i < fetchMaximumTry; i++ {
 		if i != 0 {
 			fmt.Fprintf(errWriter, "Encounter Error %v while fetching url %s. Retry the %d th time. Pause %d secs.\n", err, url, i, pauseSeconds)
 			time.Sleep(time.Second * pauseSeconds)
 		}
-		data, err = fetch(url, redirect, timeout)
+		data, err = fetch(url, redirect, timeout, useCookie)
 		if err == nil {
 			break
 		}
@@ -137,14 +171,14 @@ func fetchReadCache(url string) (*string, error) {
 }
 
 // fetchOneURL guarantee returns despite the possibility of broken situation of cache mechanism.
-func fetchOneURL(url string, refresh bool, redirect bool, errWriter io.Writer, timeout time.Duration) (str_ptr *string, err error, c <-chan struct{}) {
+func fetchOneURL(url string, refresh bool, redirect bool, errWriter io.Writer, timeout time.Duration, useCookie bool) (str_ptr *string, err error, c <-chan struct{}) {
 	if !refresh {
 		str_ptr, err = fetchReadCache(url)
 		if err == nil {
 			return
 		}
 	}
-	str_ptr, err = fetchWithTry(url, redirect, errWriter, timeout)
+	str_ptr, err = fetchWithTry(url, redirect, errWriter, timeout, useCookie)
 	if err != nil {
 		return nil, err, nil
 	}
@@ -171,7 +205,7 @@ func syncFetch(options *FetchOption, urls []string) (data []*string, errs []erro
 				wg.Done()
 			}()
 			fetchTokens <- struct{}{}
-			_data, _err, _ch := fetchOneURL(url, options.Refresh, options.Redirect, options.ErrWriter, options.Timeout)
+			_data, _err, _ch := fetchOneURL(url, options.Refresh, options.Redirect, options.ErrWriter, options.Timeout, options.UseCookie)
 			data[i], errs[i], IOCompletes[i] = _data, _err, _ch
 			<-fetchTokens
 		}(i, url)
@@ -195,7 +229,7 @@ func asyncFetch(options *FetchOption, receiver chan<- FetchResult, urls []string
 		go func(i int, url string) {
 			defer wg.Done()
 			fetchTokens <- struct{}{}
-			_data, _err, _ch := fetchOneURL(url, options.Refresh, options.Redirect, options.ErrWriter, options.Timeout)
+			_data, _err, _ch := fetchOneURL(url, options.Refresh, options.Redirect, options.ErrWriter, options.Timeout, options.UseCookie)
 			IOCompletes[i] = _ch
 			receiver <- FetchResult{data: _data, err: _err, url: url}
 			<-fetchTokens
@@ -218,6 +252,7 @@ type FetchOption struct {
 	Timeout   time.Duration
 	Refresh   bool
 	Redirect  bool
+	UseCookie bool
 	ErrWriter io.Writer
 	// signal will be sent whenever a url is processed, either successful or unsuccessful.
 	Signal   chan<- struct{}
@@ -416,9 +451,12 @@ type TagA struct {
 	Text string
 }
 
+func (t TagA) String() string {
+	return t.Text
+}
+
 // ParseATags cannot return []*TagA, in which case data will be recycled.
 func ParseATags(n_s []*html.Node) (rets []TagA) {
-	rets = make([]TagA, len(n_s), len(n_s))
 	for _, n := range n_s {
 		if n.Type != html.ElementNode || n.Data != "a" {
 			continue
@@ -430,7 +468,10 @@ func ParseATags(n_s []*html.Node) (rets []TagA) {
 				break
 			}
 		}
-		tag.Text = ExtractText(n, "", nil)
+		tag.Text = strings.TrimSpace(ExtractText(n, "", nil))
+		if tag.Href == "" {
+			continue
+		}
 		rets = append(rets, tag)
 	}
 	return
@@ -443,4 +484,20 @@ func SignatureURL(URL string) (string, error) {
 		return "", e
 	}
 	return b.Hostname(), nil
+}
+
+func AddQueryToURL(URL string, keys []string, values []string) (string, error) {
+	if len(keys) != len(values) {
+		return "", Invalid
+	}
+	u, e := url.Parse(URL)
+	if e != nil {
+		return "", e
+	}
+	q, _ := url.ParseQuery(u.RawQuery)
+	for i := 0; i < len(keys); i++ {
+		q.Add(keys[i], values[i])
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }

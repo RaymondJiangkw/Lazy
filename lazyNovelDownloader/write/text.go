@@ -48,7 +48,8 @@ func WriteToTxt(writer io.Writer, chapters extract.Chapters, filePath string, no
 	novel += "Name:	" + novelInfo.Name + "\n"
 	novel += "Author:	" + novelInfo.Author + "\n"
 
-	go display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
+	// NOTICE: Omit Error Here
+	finish, _ := display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
 
 	for _, c := range chapters {
 		novel += "\n" + c.Name + "\n"
@@ -60,6 +61,8 @@ func WriteToTxt(writer io.Writer, chapters extract.Chapters, filePath string, no
 		novel += "\n"
 		signal <- struct{}{}
 	}
+	close(signal)
+	<-finish
 	fmt.Fprintf(writer, "%s", outputIOText)
 	e = utils.WriteFileString(filePath, &novel, false)
 	return
@@ -92,7 +95,8 @@ func WriteToEpub(writer io.Writer, chapters extract.Chapters, filePath string, n
 	catalog += `</div>`
 	epub.AddSection(catalog, "Catalog", "catalog.xhtml", "")
 
-	go display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
+	// Omit Error Here
+	Finish, _ := display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Phase: []int{1}, Signal: [][]<-chan struct{}{[]<-chan struct{}{signal}}, Maximum: [][]int{[]int{len(chapters)}}, Prefix: [][]string{[]string{outputPrePostfixText + "Write: "}}, Postfix: [][]string{[]string{outputPrePostfixText}}})
 
 	for finish, c := range chapters {
 		content := c.Content
@@ -102,11 +106,13 @@ func WriteToEpub(writer io.Writer, chapters extract.Chapters, filePath string, n
 		_, e = epub.AddSection(`<h2>`+c.Name+`</h2>`+`<div id="content">`+EpubFormatString(content)+`</div>`+`<div id="foot">`+`<a href="catalog.xhtml" align="right">Back to Catalog</a>`+`</div>`, c.Name, strconv.Itoa(finish)+".xhtml", "")
 		if e != nil {
 			close(signal)
+			<-Finish
 			return
 		}
 		signal <- struct{}{}
 	}
 	close(signal)
+	<-Finish
 	fmt.Fprintf(writer, "%s", outputIOText)
 	e = epub.Write(filePath)
 	return

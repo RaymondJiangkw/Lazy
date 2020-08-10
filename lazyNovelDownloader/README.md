@@ -19,22 +19,33 @@ $ go build lnd.go
 | Command | Description                        | Optional | Default               |
 | ------- | ---------------------------------- | -------- | --------------------- |
 | name    | Novel Name                         | false    |                       |
-| source  | URL for Catalog Html File of Novel | false    |                       |
+| auto    | Whether to detect catalogs automatically, given the name of novel | true | false
+| source  | URL for Catalog Html File of Novel | true     | ""                    |
 | author  | Novel Author                       | true     | ""                    |
 | format  | txt/epub                           | true     | txt                   |
 | o       | Output File Name(can include path) | true     | Arg of `name` command |
 | h/help  | Log Help                           |          |                       |
+* NOTICE: One of `source` and `auto` must be specified. When they are both given, `source` will be used.
+
+## Feature
+* Support `.epub` output format.
+* Asynchronize I/O operations to prevent `cache` mechanism from influencing performance.
+* Realize *Auto-Detection* of catalogs to save labor and *Merging* of catalogs to generate better content.
 
 ## Acknowledge
+* `Bing`: used to search catalogs of novel.
 * `bmaupin/go-epub`: used to generate `.epub` file.
 * `mvdan/xurls`: used to delete `url` from text.
+* `cheggaaa/pb`: used to generate multiple progress bars.
+* `andybalholm/cascadia`: used to extract tags based on CSS Selector.
+* `cj1128/myers-diff`: used to integrate catalogs provided by different websites.
 * [Ans in Stack Overflow](https://stackoverflow.com/questions/53666867/after-called-peek-method-the-origin-data-has-changed): used to decode html file.
 
-## TODO
-* Automatically detect potential websites for catalog, only given name of Novel.
-* Develop mode: `<f> Fast` and `<q> Quality` for choosing appropriate catalog website.
-* Compare catalogs between different websites, and Assess contents provided by different websites to collect high-quality text.
+## Issue
+* When the width of terminal is too small to fit in the whole progress bar, there will be some display errors.
+* When the amount of chapters of novel is too small, `auto` may result in wrongly chosen catalogs.
 
 ## Log
+* 2020/08/10 Release Beta Version.
 * 2020/08/08 Rewrite the whole program and Prepare for Auto-Detection.
 * 2020/08/01 Release Alpha Version.

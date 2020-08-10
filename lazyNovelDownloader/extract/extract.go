@@ -14,7 +14,7 @@ const (
 	extractCacheFolder       = ".novel"
 )
 
-func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []error) {
+func Extract(writer io.Writer, urls []string, novelName string, validate bool, merge bool) ([]Chapters, []error) {
 	var display utils.Display
 	cnt := len(urls)
 	catalogueSignal := make(chan struct{}, cnt)
@@ -29,15 +29,36 @@ func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []e
 			catalogues[i], catalogueErrors[i] = Catalogue(url)
 		}(i, url)
 	}
-	display.EasyProgress(writer, "Fetching Catalogues", "...", len(urls), catalogueSignal)
-	close(catalogueSignal)
+	finish, _ := display.EasyProgress(writer, "Fetching Catalogues", "...", len(urls), catalogueSignal) // NOTICE: Confident of Success
+	<-finish
+	// Validating Catalogues
+	if signal := make(chan struct{}); validate {
+		// Exclude Invalid Chapters
+		var validCatalogs []Chapters
+		for i := 0; i < len(catalogues); i++ {
+			if catalogueErrors[i] == nil {
+				validCatalogs = append(validCatalogs, catalogues[i])
+			}
+		}
+		// Check for Empty
+		if len(validCatalogs) == 0 {
+			return nil, []error{fmt.Errorf("No Valid Catalogues")}
+		} else {
+			catalogueErrors = make([]error, len(validCatalogs), len(validCatalogs))
+		}
+		finish := display.TemporaryText(writer, "Validating Catalogues...", signal)
+		catalogues = ValidCatalog(validCatalogs)
+		cnt = len(catalogues) // NOTICE: Update `cnt`
+		signal <- struct{}{}
+		<-finish
+	}
 	beginTime := time.Now()
 	var times int
 	for {
 		times++
 		fmt.Fprintf(writer, "%dth Turn:\n", times)
 		initSignal := make(chan struct{})
-		go display.TemporaryText(writer, "Initializing...", initSignal)
+		finish := display.TemporaryText(writer, "Initializing...", initSignal)
 		// Utilized Data
 		Urls := make([][]string, 0, 0)
 		var ContentSignals []<-chan ContentResult
@@ -84,7 +105,9 @@ func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []e
 			break
 		}
 		close(initSignal)
-		display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Prefix: Prefix, Postfix: Postfix, Maximum: Maximums, Signal: Signals, Phase: Phases})
+		<-finish
+		// Omit Error Here
+		finish, _ = display.ProgressBar(&utils.ProgressBarOption{Writer: writer, Prefix: Prefix, Postfix: Postfix, Maximum: Maximums, Signal: Signals, Phase: Phases})
 		hasFail := false
 		for i := 0; i < validCnt; i++ {
 			result := <-ContentSignals[i]
@@ -102,6 +125,7 @@ func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []e
 				}
 			}
 		}
+		<-finish
 		fmt.Fprintf(writer, "I/O Synchronizing...\n")
 		utils.WaitSync(IOCompletes)
 		// Here is an early stop to format output.
@@ -114,5 +138,25 @@ func Extract(writer io.Writer, urls []string, novelName string) ([]Chapters, []e
 	}
 	fmt.Printf("After %dth Turn, finish all pages.\n", times)
 	fmt.Printf("Total time: %.0f secs.\n", time.Since(beginTime).Seconds())
+	if signal := make(chan struct{}); merge {
+		finish := display.TemporaryText(writer, "Merging Catalogues...", signal)
+		var mergedCatalogues Chapters
+		for i := 0; i < len(catalogues); i++ {
+			// Recheck since validate and merge are separate.
+			if catalogueErrors[i] != nil {
+				continue
+			}
+			mergedCatalogues = MergeCatalog(mergedCatalogues, catalogues[i])
+		}
+		signal <- struct{}{}
+		<-finish
+		if mergedCatalogues == nil {
+			return nil, []error{fmt.Errorf("No Valid Catalogues after merging")}
+		} else {
+			// Update Return Values
+			catalogues = []Chapters{mergedCatalogues}
+			catalogueErrors = []error{nil}
+		}
+	}
 	return catalogues, catalogueErrors
 }
