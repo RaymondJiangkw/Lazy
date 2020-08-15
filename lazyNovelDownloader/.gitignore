@@ -1,7 +1,9 @@
+*
+!/**/
+!*.*
 .cache/
 .novel/
 *.exe
 *.txt
 *.epub
 test.go
-*.

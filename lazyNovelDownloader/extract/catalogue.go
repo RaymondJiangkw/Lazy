@@ -67,7 +67,8 @@ func Catalogue(url string) (c Chapters, e error) {
 	var tmp Chapters // Remove possible head duplications
 	var exists map[string]int = make(map[string]int)
 	for _, a := range aTags {
-		if a.Href == "" || a.Text == "" {
+		// Filter out Garbage Link
+		if a.Href == "" || a.Text == "" || strings.Index(a.Href, "javascript") != -1 {
 			continue
 		}
 		url, err := utils.CompleteURL(url, a.Href)
@@ -152,10 +153,12 @@ func ValidCatalog(c_s []Chapters) []Chapters {
 		return ret
 	}
 	for i := 1; i < len(groups); i++ {
-		if len(groups[i]) > len(groups[maximumGroupIndex]) {
+		avgLengthI := cntLength(groups[i]) / len(groups[i])
+		avgLengthMax := cntLength(groups[maximumGroupIndex]) / len(groups[maximumGroupIndex])
+		if avgLengthI > avgLengthMax { // NOTICE: prefer longer urls first.
 			maximumGroupIndex = i
-		} else if len(groups[i]) == len(groups[maximumGroupIndex]) { // NOTICE: prefer longer urls.
-			if cntLength(groups[i]) > cntLength(groups[maximumGroupIndex]) {
+		} else if avgLengthI == avgLengthMax {
+			if len(groups[i]) > len(groups[maximumGroupIndex]) {
 				maximumGroupIndex = i
 			}
 		}
